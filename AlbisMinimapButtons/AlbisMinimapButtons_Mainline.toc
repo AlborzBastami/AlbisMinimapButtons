@@ -1,0 +1,22 @@
+## Interface: 120107
+## Title: Albis Minimap Buttons
+## IconTexture: Interface\AddOns\AlbisMinimapButtons\Media\Logo
+## Notes: Collects all minimap buttons in one scrollable dropdown menu.
+## Notes-deDE: Sammelt alle Minimap-Buttons in einem scrollbaren Dropdown-Menü.
+## Notes-frFR: Regroupe tous les boutons de la minicarte dans un menu déroulant défilant.
+## Notes-esES: Reúne todos los botones del minimapa en un menú desplegable con desplazamiento.
+## Notes-esMX: Reúne todos los botones del minimapa en un menú desplegable con desplazamiento.
+## Notes-itIT: Raccoglie tutti i pulsanti della minimappa in un menu a discesa scorrevole.
+## Notes-ptBR: Reúne todos os botões do minimapa em um menu suspenso com rolagem.
+## Notes-ruRU: Собирает все кнопки миникарты в прокручиваемое выпадающее меню.
+## Notes-koKR: 모든 미니맵 버튼을 스크롤 가능한 드롭다운 메뉴에 모아 줍니다.
+## Notes-zhCN: 将所有小地图按钮收纳到一个可滚动的下拉菜单中。
+## Notes-zhTW: 將所有小地圖按鈕收納到一個可捲動的下拉選單中。
+## Author: Albi
+## Version: 1.6.1
+## OptionalDeps: LibSharedMedia-3.0, SharedMedia, ElvUI
+## X-License: MIT
+## SavedVariables: AlbisMinimapButtonsDB
+
+Locales.lua
+AlbisMinimapButtons.lua

@@ -1,0 +1,10 @@
+# Build-Artefakte / Release-Pakete
+*.zip
+*.rar
+*.7z
+/dist/
+/release/
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
