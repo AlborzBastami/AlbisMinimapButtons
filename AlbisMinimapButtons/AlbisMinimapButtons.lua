@@ -517,6 +517,23 @@ local function IsUIParentCandidate(f)
     return ok and res
 end
 
+-- Geschuetzte (forbidden) Blizzard-Frames duerfen von Addons nicht einmal
+-- abgefragt werden; jede Pruefung ist daher komplett abgesichert
+local function IsForbiddenFrame(f)
+    local ok, res = pcall(function() return f.IsForbidden and f:IsForbidden() end)
+    return not ok or res
+end
+
+local function IsShownCandidate(f, onUIParent)
+    if IsForbiddenFrame(f) then return false end
+    local ok, res = pcall(function()
+        if not f:IsShown() then return false end
+        if onUIParent then return IsAnchoredToMinimap(f) and LooksLikeMinimapButton(f, true) end
+        return LooksLikeMinimapButton(f)
+    end)
+    return ok and res
+end
+
 local function LDBWanted(ldbName, btn)
     local hidden = btn.db and btn.db.hide
     return not hidden and not db.ignore[ldbName] and not db.ignore[btn:GetName() or ""]
@@ -558,7 +575,7 @@ local function ScanUnsafe(full)
     for _, parent in ipairs(MinimapParents()) do
         if parent then
             for _, f in ipairs({ parent:GetChildren() }) do
-                if not seen[f] and (grabbed[f] or (f:IsShown() and SafeLooksLike(f))) then
+                if not seen[f] and (grabbed[f] or IsShownCandidate(f)) then
                     local fname = f:GetName()
                     if not (fname and db.ignore[fname]) then
                         if TryAdd(f, NameFor(f), "frame") then seen[f] = true end
@@ -571,7 +588,7 @@ local function ScanUnsafe(full)
     -- 3) Buttons an UIParent, die an der Minimap verankert sind
     --    (teurer, daher nur bei vollstaendiger Suche)
     for _, f in ipairs(full and { UIParent:GetChildren() } or {}) do
-        if not seen[f] and not grabbed[f] and f ~= holder and f:IsShown() and IsUIParentCandidate(f) then
+        if not seen[f] and not grabbed[f] and f ~= holder and IsShownCandidate(f, true) then
             if TryAdd(f, NameFor(f), "frame") then seen[f] = true end
         end
     end
@@ -603,13 +620,13 @@ local function NeedsRescanUnsafe(full)
     for _, parent in ipairs(MinimapParents()) do
         if parent then
             for _, f in ipairs({ parent:GetChildren() }) do
-                if not grabbed[f] and not failed[f] and f:IsShown() and SafeLooksLike(f) then return true end
+                if not grabbed[f] and not failed[f] and IsShownCandidate(f) then return true end
             end
         end
     end
     if full then
         for _, f in ipairs({ UIParent:GetChildren() }) do
-            if not grabbed[f] and not failed[f] and f ~= holder and f:IsShown() and IsUIParentCandidate(f) then return true end
+            if not grabbed[f] and not failed[f] and f ~= holder and IsShownCandidate(f, true) then return true end
         end
     end
     return false
@@ -1958,7 +1975,7 @@ function AMB:HookFrameCreation()
         if type(methods) == "table" and methods.SetParent then
             hooksecurefunc(methods, "SetParent", function(f, parent)
                 -- Kartenpins werden oft umgehaengt: erst den einen Frame pruefen
-                if IsMinimapParent(parent) and not grabbed[f] and f:IsShown() and SafeLooksLike(f) then
+                if IsMinimapParent(parent) and not grabbed[f] and IsShownCandidate(f) then
                     AMB:ScanSoon(0.5)
                 end
             end)

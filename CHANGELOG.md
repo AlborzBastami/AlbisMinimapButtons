@@ -1,3 +1,7 @@
+# 1.8.1
+
+- Fixed an error ("Attempt to access forbidden object") caused by the button search touching protected Blizzard windows.
+
 # 1.8.0
 
 - Minimap buttons without a frame name (e.g. SpellRank) are now collected: buttons on the edge of the minimap are recognized by their position, Blizzard's own minimap parts are still left alone. Their name is taken from their tooltip.
