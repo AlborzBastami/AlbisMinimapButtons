@@ -1,3 +1,8 @@
+# 1.8.2
+
+- Buttons without a frame name now get their real addon name instead of "Addon" (read from where the button was created or from its tooltip).
+- Control buttons of minimap replacements (e.g. EllesmereUI's tracking, group finder or "Addon Buttons" toggle) and Blizzard's own unnamed minimap parts are no longer collected.
+
 # 1.8.1
 
 - Fixed an error ("Attempt to access forbidden object") caused by the button search touching protected Blizzard windows.

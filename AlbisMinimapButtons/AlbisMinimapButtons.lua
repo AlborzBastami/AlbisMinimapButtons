@@ -430,25 +430,59 @@ local function IsOnMinimapRim(f)
     return dist >= r * 0.75 and dist <= r * 1.5 + 40 * fs
 end
 
--- Titel aus dem Tooltip des Buttons (erste Zeile), fuer Buttons ohne Namen
+-- Titel aus dem Tooltip des Buttons (erster Text), fuer Buttons ohne Namen.
+-- Der Text wird direkt beim Aufruf von SetText/AddLine mitgeschnitten, weil
+-- das Auslesen der Tooltip-Zeilen auf modernen Clients (geschuetzte Werte)
+-- nicht zuverlaessig klappt.
+local tipCapture, tipCaptured
+local function CaptureTip(_, text)
+    if tipCapture and not tipCaptured and type(text) == "string" and text ~= "" then
+        tipCaptured = text
+    end
+end
+local tipHooked = false
 local function TooltipTitle(f)
     local onEnter = GetScriptSafe(f, "OnEnter")
     if not onEnter or not GameTooltip then return end
-    GameTooltip:Hide()
-    local title
-    if pcall(onEnter, f) and GameTooltip:IsShown() then
-        local l = _G.GameTooltipTextLeft1
-        title = l and l:GetText()
+    if not tipHooked then
+        tipHooked = true
+        for _, m in ipairs({ "SetText", "AddLine", "AddDoubleLine" }) do
+            if GameTooltip[m] then hooksecurefunc(GameTooltip, m, CaptureTip) end
+        end
     end
+    tipCapture, tipCaptured = true, nil
+    pcall(onEnter, f)
+    tipCapture = false
     local onLeave = GetScriptSafe(f, "OnLeave")
     if onLeave then pcall(onLeave, f) end
     GameTooltip:Hide()
+    local title = tipCaptured
+    tipCaptured = nil
     if type(title) == "string" then
-        title = title:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|T.-|t", ""):match("^%s*(.-)%s*$")
-        if title ~= "" and #title <= 40 then return title end
+        local ok, clean = pcall(function()
+            return (title:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|T.-|t", ""):match("^%s*(.-)%s*$"))
+        end)
+        if ok and clean and clean ~= "" and #clean <= 40 then return clean end
     end
 end
 
+-- Wo wurde der Frame erzeugt? Moderne Clients (Retail, WoW Forever) kennen
+-- GetSourceLocation, z.B. "Interface/AddOns/SpellRank/SpellRank.lua:376".
+-- Liefert den Addon-Ordner, "BLIZZARD" fuer Blizzard-Code oder nil.
+local function SourceAddon(f)
+    if not f.GetSourceLocation then return end
+    local ok, loc = pcall(f.GetSourceLocation, f)
+    if not ok or type(loc) ~= "string" or loc == "" then return end
+    local folder = loc:match("[Aa][Dd][Dd][Oo][Nn][Ss][/\\]([^/\\]+)")
+    return folder or "BLIZZARD"
+end
+
+-- Icons aus Blizzard-Atlanten nutzen fast nur Bedienelemente von UI-Paketen
+-- (z.B. Tracking- oder Gruppensuche-Knopf eines Minimap-Ersatzes)
+local function UsesAtlasIcon(f)
+    local tex = FindIconTexture(f)
+    return tex and tex.GetAtlas and tex:GetAtlas() and true or false
+end
 -- strict = true: nur Buttons mit typischem Namen (fuer Frames ausserhalb der Minimap)
 local function LooksLikeMinimapButton(f, strict)
     if f.IsForbidden and f:IsForbidden() then return false end
@@ -473,6 +507,8 @@ local function LooksLikeMinimapButton(f, strict)
     -- (Minimap.ZoomIn ...), Kartenpins sind kleiner und liegen innen.
     if w < 20 or h < 20 then return false end
     if IsParentKey(f) then return false end
+    if SourceAddon(f) == "BLIZZARD" then return false end
+    if UsesAtlasIcon(f) then return false end
     return IsOnMinimapRim(f) or HasAddonIcon(f)
 end
 
@@ -485,10 +521,11 @@ local function NameFor(f)
     local folderTitle = folder and AddonTitleFor(folder)
     if folderTitle then return folderTitle end
     if name then return CleanFrameName(name) end
+    local src = SourceAddon(f)
+    if src and src ~= "BLIZZARD" then return AddonTitleFor(src) or src end
     local okT, tip = pcall(TooltipTitle, f)
     return (okT and tip) or folder or "Addon"
 end
-
 local function SafeLooksLike(f)
     local ok, res = pcall(LooksLikeMinimapButton, f)
     return ok and res
