@@ -1,3 +1,13 @@
+# 1.7.0
+
+- Much more reliable button detection: buttons that an addon creates or shows later (even minutes after login) are now picked up automatically, without having to open the menu first.
+- Buttons that are attached to the screen but placed on the minimap (e.g. Guild Roster Manager) are now collected too.
+- Buttons with unusual or missing frame names are recognized by their addon icon.
+- Load-on-demand addons and late LibDBIcon registrations are handled.
+- A single faulty button from another addon can no longer stop the whole scan.
+- Entries are named after the addon they belong to where possible.
+- Warning in chat if another minimap button collector (e.g. MinimapButtonButton) is active.
+
 # 1.6.1
 
 - Translations reviewed and improved (Korean, Chinese, Russian, Portuguese, Spanish, Italian, French).

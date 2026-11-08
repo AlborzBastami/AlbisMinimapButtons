@@ -373,22 +373,67 @@ local function HasClickHandler(f)
     return GetScriptSafe(f, "OnClick") or GetScriptSafe(f, "OnMouseUp") or GetScriptSafe(f, "OnMouseDown")
 end
 
-local function LooksLikeMinimapButton(f)
+-- Pfad der Icon-Textur (bei modernen Clients evtl. eine Datei-ID)
+local function IconPath(f)
+    local tex = FindIconTexture(f)
+    if not tex then return end
+    local path = tex.GetTextureFilePath and tex:GetTextureFilePath() or tex:GetTexture()
+    if type(path) == "string" then return (path:gsub("/", "\\")) end
+end
+
+-- Addon-Ordner, aus dem das Icon stammt (z.B. "Guild_Roster_Manager")
+local function IconAddonFolder(f)
+    local path = IconPath(f)
+    return path and path:lower():find("^interface\\addons\\") and path:match("^[^\\]+\\[^\\]+\\([^\\]+)")
+end
+
+-- Stammt der Button erkennbar von einem Addon (oder zeigt ein Spiel-Icon)?
+-- Blizzards eigene Minimap-Elemente nutzen Interface\Minimap-Texturen.
+local function HasAddonIcon(f)
+    local path = IconPath(f)
+    path = path and path:lower()
+    return path and (path:find("^interface\\addons\\") or path:find("^interface\\icons\\")) and true or false
+end
+
+local function HasButtonKeyword(lname)
+    return lname:find("minimap") or lname:find("button") or lname:find("launcher") or lname:find("icon")
+end
+
+-- strict = true: nur Buttons mit typischem Namen (fuer Frames ausserhalb der Minimap)
+local function LooksLikeMinimapButton(f, strict)
+    if f.IsForbidden and f:IsForbidden() then return false end
     local name = f:GetName()
-    if not name or BLIZZARD[name] or db.ignore[name] then return false end
-    for _, p in ipairs(IGNORE_PATTERNS) do
-        if name:find(p) then return false end
+    if name and (BLIZZARD[name] or db.ignore[name]) then return false end
+    local lname = name and name:lower() or ""
+    local strong = lname:find("minimapbutton") or lname:find("minimap_button") or lname:find("^libdbicon")
+    if name and not strong then
+        for _, p in ipairs(IGNORE_PATTERNS) do
+            if name:find(p) then return false end
+        end
     end
     local t = f:GetObjectType()
     if t ~= "Button" and t ~= "Frame" and t ~= "CheckButton" then return false end
     if not HasClickHandler(f) then return false end
     local w, h = f:GetWidth() or 0, f:GetHeight() or 0
-    if w < 16 or w > 50 or h < 16 or h > 50 then return false end
-    local lname = name:lower()
-    if not (lname:find("minimap") or lname:find("button") or lname:find("launcher") or lname:find("icon")) then
-        return false
-    end
-    return true
+    if w < 16 or w > 60 or h < 16 or h > 60 then return false end
+    if name and HasButtonKeyword(lname) then return true end
+    if strict then return false end
+    -- Ohne typischen Namen (oder ganz ohne Namen): nur, wenn das Icon
+    -- eindeutig von einem Addon stammt. Kartenpins sind meist kleiner.
+    if w < 20 or h < 20 then return false end
+    return HasAddonIcon(f)
+end
+
+-- Anzeigename fuer einen fremden Button: bevorzugt der Titel des Addons,
+-- aus dessen Ordner das Icon stammt
+local function NameFor(f)
+    local name = f:GetName()
+    local okF, folder = pcall(IconAddonFolder, f)
+    folder = okF and folder or nil
+    local folderTitle = folder and AddonTitleFor(folder)
+    if folderTitle then return folderTitle end
+    if name then return CleanFrameName(name) end
+    return folder or "Addon"
 end
 
 local function SafeLooksLike(f)
@@ -396,36 +441,86 @@ local function SafeLooksLike(f)
     return ok and res
 end
 
+-- Frames, an denen Minimap-Buttons direkt haengen
+local function MinimapParents()
+    return { Minimap, MinimapBackdrop, MinimapCluster }
+end
+
+-- Manche Addons (z.B. Guild Roster Manager) haengen ihren Button an
+-- UIParent und verankern ihn nur an der Minimap
+local function IsAnchoredToMinimap(f)
+    if f.IsForbidden and f:IsForbidden() then return false end
+    for i = 1, (f:GetNumPoints() or 0) do
+        local _, rel = f:GetPoint(i)
+        if rel and (rel == Minimap or rel == MinimapBackdrop or rel == MinimapCluster) then
+            return true
+        end
+    end
+    return false
+end
+
+local function IsUIParentCandidate(f)
+    local ok, res = pcall(function() return IsAnchoredToMinimap(f) and LooksLikeMinimapButton(f, true) end)
+    return ok and res
+end
+
+local function LDBWanted(ldbName, btn)
+    local hidden = btn.db and btn.db.hide
+    return not hidden and not db.ignore[ldbName] and not db.ignore[btn:GetName() or ""]
+end
+
+-- Fuegt einen Eintrag hinzu; ein fehlerhafter Fremd-Button darf
+-- niemals den restlichen Scan abbrechen
+local failed = {}       -- btn -> true, Buttons, die sich nicht einsammeln liessen
+local function TryAdd(btn, name, kind, ldbName)
+    local ok = pcall(AddEntry, btn, name, kind, ldbName)
+    if not ok then
+        failed[btn] = true
+        -- halb angelegten Eintrag wieder entfernen
+        if entries[#entries] and entries[#entries].btn == btn then entries[#entries] = nil end
+    end
+    return ok
+end
+
+local listed = {}       -- btn -> true, alles was aktuell im Menue steht
+
 local function ScanUnsafe()
     wipe(entries)
+    wipe(listed)
     local seen = {}
 
     -- 1) LibDBIcon
     local LDBIcon = LibStub and LibStub("LibDBIcon-1.0", true)
     if LDBIcon and LDBIcon.objects then
         for ldbName, btn in pairs(LDBIcon.objects) do
-            local hidden = btn.db and btn.db.hide
-            if not hidden and not db.ignore[ldbName] and not db.ignore[btn:GetName() or ""] then
-                AddEntry(btn, ldbName, "ldb", ldbName)
-                seen[btn] = true
-            end
+            local ok, wanted = pcall(LDBWanted, ldbName, btn)
+            if ok and wanted then TryAdd(btn, ldbName, "ldb", ldbName) end
+            -- ausgeblendete LibDBIcon-Buttons auch nicht ueber die Frame-Suche holen
+            seen[btn] = true
         end
     end
 
     -- 2) Andere Buttons direkt an der Minimap
-    local parents = { Minimap, MinimapBackdrop, MinimapCluster }
-    for _, parent in ipairs(parents) do
+    for _, parent in ipairs(MinimapParents()) do
         if parent then
             for _, f in ipairs({ parent:GetChildren() }) do
                 if not seen[f] and (grabbed[f] or (f:IsShown() and SafeLooksLike(f))) then
-                    if not (f:GetName() and db.ignore[f:GetName()]) then
-                        AddEntry(f, CleanFrameName(f:GetName()), "frame")
-                        seen[f] = true
+                    local fname = f:GetName()
+                    if not (fname and db.ignore[fname]) then
+                        if TryAdd(f, NameFor(f), "frame") then seen[f] = true end
                     end
                 end
             end
         end
     end
+
+    -- 3) Buttons an UIParent, die an der Minimap verankert sind
+    for _, f in ipairs({ UIParent:GetChildren() }) do
+        if not seen[f] and not grabbed[f] and f ~= holder and f:IsShown() and IsUIParentCandidate(f) then
+            if TryAdd(f, NameFor(f), "frame") then seen[f] = true end
+        end
+    end
+
     -- Bereits eingesammelte Buttons haengen jetzt am Halter
     for _, f in ipairs({ holder:GetChildren() }) do
         local e = grabbed[f]
@@ -435,8 +530,39 @@ local function ScanUnsafe()
         end
     end
 
-    table.sort(entries, function(a, b) return a.name:lower() < b.name:lower() end)
+    for _, e in ipairs(entries) do listed[e.btn] = true end
+    table.sort(entries, function(a, b) return tostring(a.name):lower() < tostring(b.name):lower() end)
     if AMB.menu and AMB.menu:IsShown() then AMB:Refresh() end
+end
+
+-- Schnelle Pruefung: gibt es einen neuen Button (oder hat sich bei
+-- LibDBIcon etwas geaendert), der noch nicht im Menue ist?
+local function NeedsRescanUnsafe(full)
+    local LDBIcon = LibStub and LibStub("LibDBIcon-1.0", true)
+    if LDBIcon and LDBIcon.objects then
+        for ldbName, btn in pairs(LDBIcon.objects) do
+            local ok, wanted = pcall(LDBWanted, ldbName, btn)
+            if ok and not failed[btn] and (wanted and true or false) ~= (listed[btn] and true or false) then return true end
+        end
+    end
+    for _, parent in ipairs(MinimapParents()) do
+        if parent then
+            for _, f in ipairs({ parent:GetChildren() }) do
+                if not grabbed[f] and not failed[f] and f:IsShown() and SafeLooksLike(f) then return true end
+            end
+        end
+    end
+    if full then
+        for _, f in ipairs({ UIParent:GetChildren() }) do
+            if not grabbed[f] and not failed[f] and f ~= holder and f:IsShown() and IsUIParentCandidate(f) then return true end
+        end
+    end
+    return false
+end
+
+local function NeedsRescan(full)
+    local ok, res = pcall(NeedsRescanUnsafe, full)
+    return ok and res
 end
 
 function AMB:Scan()
@@ -1690,12 +1816,71 @@ AMB:SetScript("OnEvent", function(self, event)
         self:Scan()
         -- Manche Addons erzeugen ihre Buttons erst spaeter
         if C_Timer then
-            C_Timer.After(2, function() AMB:Scan() end)
-            C_Timer.After(8, function() AMB:Scan() end)
+            for _, t in ipairs({ 2, 5, 10, 20, 45 }) do
+                C_Timer.After(t, function() AMB:Scan() end)
+            end
         end
-        local LDBIcon = LibStub and LibStub("LibDBIcon-1.0", true)
-        if LDBIcon and LDBIcon.RegisterCallback then
-            LDBIcon.RegisterCallback(AMB, "LibDBIcon_IconCreated", function() AMB:Scan() end)
-        end
+        AMB:HookLibDBIcon()
+        AMB:WarnConflicts()
+        self:RegisterEvent("ADDON_LOADED")
+        self:RegisterEvent("PLAYER_ENTERING_WORLD")
+        AMB.watcher:Show()
+    elseif event == "ADDON_LOADED" or event == "PLAYER_ENTERING_WORLD" then
+        -- nachgeladene Addons (Load-on-Demand) bringen evtl. LibDBIcon
+        -- oder einen eigenen Button mit
+        AMB:HookLibDBIcon()
+        AMB:ScanSoon(1)
     end
+end)
+
+-- LibDBIcon meldet neu erzeugte Buttons; der Callback wird registriert,
+-- sobald irgendein Addon die Bibliothek mitbringt
+function AMB:HookLibDBIcon()
+    local LDBIcon = LibStub and LibStub("LibDBIcon-1.0", true)
+    if LDBIcon and LDBIcon.RegisterCallback and self.ldbHooked ~= LDBIcon then
+        self.ldbHooked = LDBIcon
+        LDBIcon.RegisterCallback(AMB, "LibDBIcon_IconCreated", function() AMB:ScanSoon(0.1) end)
+    end
+end
+
+-- Andere Button-Sammler nehmen uns die Buttons weg
+local CONFLICTS = { "MinimapButtonButton", "MBB", "MinimapButtonBag", "MinimapButtonFrame", "SexyMap", "HidingBar" }
+function AMB:WarnConflicts()
+    local isLoaded = (C_AddOns and C_AddOns.IsAddOnLoaded) or IsAddOnLoaded
+    if not isLoaded then return end
+    for _, name in ipairs(CONFLICTS) do
+        local ok, loaded = pcall(isLoaded, name)
+        if ok and loaded then Print(TR.MSG_CONFLICT:format(AddonTitleFor(name) or name)) end
+    end
+end
+
+-- Mehrere Anfragen kurz hintereinander werden zu einem Scan zusammengefasst
+local scanPending = false
+function AMB:ScanSoon(delay)
+    if not C_Timer then self:Scan(); return end
+    if scanPending then return end
+    scanPending = true
+    C_Timer.After(delay or 0.5, function()
+        scanPending = false
+        AMB:Scan()
+    end)
+end
+
+-- Waechter: schaut regelmaessig nach Buttons, die ein Addon erst
+-- spaeter erzeugt oder einblendet (z.B. nach dem Laden seiner Daten)
+local watcher = CreateFrame("Frame")
+AMB.watcher = watcher
+watcher:Hide()
+watcher.elapsed, watcher.fullElapsed = 0, 0
+watcher:SetScript("OnUpdate", function(self, elapsed)
+    self.elapsed = self.elapsed + elapsed
+    self.fullElapsed = self.fullElapsed + elapsed
+    if self.elapsed < 2 then return end
+    self.elapsed = 0
+    local full = false
+    if self.fullElapsed >= 10 then
+        self.fullElapsed = 0
+        full = not (InCombatLockdown and InCombatLockdown())
+    end
+    if NeedsRescan(full) then AMB:Scan() end
 end)
