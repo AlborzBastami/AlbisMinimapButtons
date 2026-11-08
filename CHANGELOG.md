@@ -1,3 +1,11 @@
+# 1.8.0
+
+- Minimap buttons without a frame name (e.g. SpellRank) are now collected: buttons on the edge of the minimap are recognized by their position, Blizzard's own minimap parts are still left alone. Their name is taken from their tooltip.
+- New buttons are noticed the moment an addon creates them or moves them to the minimap. The background check now only runs every 10 seconds, which uses fewer resources.
+- The version is shown in the button tooltip and in the options, and with /amb version.
+- Version check in party/raid: if someone in your group has a newer version, you get a hint in chat to update. /amb version also lists the versions of your group members.
+- /amb ignore now also works with the shown name of a button.
+
 # 1.7.0
 
 - Much more reliable button detection: buttons that an addon creates or shows later (even minutes after login) are now picked up automatically, without having to open the menu first.

@@ -45,6 +45,9 @@ local MouseIsOver = MouseIsOver or function(f)
     return f and f:IsVisible() and f:IsMouseOver() or false
 end
 
+local GetAddOnMetadata = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
+local VERSION = (GetAddOnMetadata and GetAddOnMetadata(ADDON, "Version")) or "?"
+AMB.version = VERSION
 local GetNumAddOns  = (C_AddOns and C_AddOns.GetNumAddOns) or GetNumAddOns
 local GetAddOnInfo  = (C_AddOns and C_AddOns.GetAddOnInfo) or GetAddOnInfo
 
@@ -399,6 +402,53 @@ local function HasButtonKeyword(lname)
     return lname:find("minimap") or lname:find("button") or lname:find("launcher") or lname:find("icon")
 end
 
+-- Ist der Frame als Feld seines Elternframes eingetragen (z.B. Minimap.ZoomIn)?
+-- So haengt Blizzard seine eigenen, namenlosen Minimap-Elemente an.
+local function IsParentKey(f)
+    local key = f.GetParentKey and f:GetParentKey()
+    if key then return true end
+    local parent = f:GetParent()
+    if type(parent) ~= "table" then return false end
+    for _, v in pairs(parent) do
+        if v == f then return true end
+    end
+    return false
+end
+
+-- Liegt der Frame am Rand der Minimap (wie fast alle Minimap-Buttons)?
+-- Kartenpins liegen dagegen meist innerhalb der Karte.
+local function IsOnMinimapRim(f)
+    if not Minimap then return false end
+    local fx, fy = f:GetCenter()
+    local mx, my = Minimap:GetCenter()
+    if not (fx and mx) then return false end
+    local fs, ms = f:GetEffectiveScale(), Minimap:GetEffectiveScale()
+    local dx, dy = fx * fs - mx * ms, fy * fs - my * ms
+    local dist = math.sqrt(dx * dx + dy * dy)
+    local r = (Minimap:GetWidth() or 140) * ms / 2
+    -- eckige Minimaps: Ecken liegen bei r * 1.41
+    return dist >= r * 0.75 and dist <= r * 1.5 + 40 * fs
+end
+
+-- Titel aus dem Tooltip des Buttons (erste Zeile), fuer Buttons ohne Namen
+local function TooltipTitle(f)
+    local onEnter = GetScriptSafe(f, "OnEnter")
+    if not onEnter or not GameTooltip then return end
+    GameTooltip:Hide()
+    local title
+    if pcall(onEnter, f) and GameTooltip:IsShown() then
+        local l = _G.GameTooltipTextLeft1
+        title = l and l:GetText()
+    end
+    local onLeave = GetScriptSafe(f, "OnLeave")
+    if onLeave then pcall(onLeave, f) end
+    GameTooltip:Hide()
+    if type(title) == "string" then
+        title = title:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|T.-|t", ""):match("^%s*(.-)%s*$")
+        if title ~= "" and #title <= 40 then return title end
+    end
+end
+
 -- strict = true: nur Buttons mit typischem Namen (fuer Frames ausserhalb der Minimap)
 local function LooksLikeMinimapButton(f, strict)
     if f.IsForbidden and f:IsForbidden() then return false end
@@ -418,10 +468,12 @@ local function LooksLikeMinimapButton(f, strict)
     if w < 16 or w > 60 or h < 16 or h > 60 then return false end
     if name and HasButtonKeyword(lname) then return true end
     if strict then return false end
-    -- Ohne typischen Namen (oder ganz ohne Namen): nur, wenn das Icon
-    -- eindeutig von einem Addon stammt. Kartenpins sind meist kleiner.
+    -- Ohne typischen Namen (oder ganz ohne Namen, z.B. SpellRank):
+    -- Blizzard-Teile der Minimap sind dort als Feld eingetragen
+    -- (Minimap.ZoomIn ...), Kartenpins sind kleiner und liegen innen.
     if w < 20 or h < 20 then return false end
-    return HasAddonIcon(f)
+    if IsParentKey(f) then return false end
+    return IsOnMinimapRim(f) or HasAddonIcon(f)
 end
 
 -- Anzeigename fuer einen fremden Button: bevorzugt der Titel des Addons,
@@ -433,7 +485,8 @@ local function NameFor(f)
     local folderTitle = folder and AddonTitleFor(folder)
     if folderTitle then return folderTitle end
     if name then return CleanFrameName(name) end
-    return folder or "Addon"
+    local okT, tip = pcall(TooltipTitle, f)
+    return (okT and tip) or folder or "Addon"
 end
 
 local function SafeLooksLike(f)
@@ -473,6 +526,7 @@ end
 -- niemals den restlichen Scan abbrechen
 local failed = {}       -- btn -> true, Buttons, die sich nicht einsammeln liessen
 local function TryAdd(btn, name, kind, ldbName)
+    if kind == "frame" and db.ignore[name] then return false end
     local ok = pcall(AddEntry, btn, name, kind, ldbName)
     if not ok then
         failed[btn] = true
@@ -484,7 +538,7 @@ end
 
 local listed = {}       -- btn -> true, alles was aktuell im Menue steht
 
-local function ScanUnsafe()
+local function ScanUnsafe(full)
     wipe(entries)
     wipe(listed)
     local seen = {}
@@ -515,7 +569,8 @@ local function ScanUnsafe()
     end
 
     -- 3) Buttons an UIParent, die an der Minimap verankert sind
-    for _, f in ipairs({ UIParent:GetChildren() }) do
+    --    (teurer, daher nur bei vollstaendiger Suche)
+    for _, f in ipairs(full and { UIParent:GetChildren() } or {}) do
         if not seen[f] and not grabbed[f] and f ~= holder and f:IsShown() and IsUIParentCandidate(f) then
             if TryAdd(f, NameFor(f), "frame") then seen[f] = true end
         end
@@ -524,7 +579,7 @@ local function ScanUnsafe()
     -- Bereits eingesammelte Buttons haengen jetzt am Halter
     for _, f in ipairs({ holder:GetChildren() }) do
         local e = grabbed[f]
-        if e and not seen[f] and e.kind == "frame" and not db.ignore[f:GetName() or ""] then
+        if e and not seen[f] and e.kind == "frame" and not db.ignore[f:GetName() or ""] and not db.ignore[e.name or ""] then
             entries[#entries + 1] = e
             seen[f] = true
         end
@@ -565,8 +620,10 @@ local function NeedsRescan(full)
     return ok and res
 end
 
-function AMB:Scan()
-    xpcall(ScanUnsafe, geterrorhandler())
+-- full = false: nur Minimap und LibDBIcon (guenstig), sonst auch UIParent
+function AMB:Scan(full)
+    if full == nil then full = true end
+    xpcall(function() ScanUnsafe(full) end, geterrorhandler())
 end
 
 ------------------------------------------------------------------------
@@ -624,7 +681,7 @@ end)
 anchor:SetScript("OnEnter", function(self)
     aGlow:SetAlpha(1)
     GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-    GameTooltip:AddLine("Albis Minimap Buttons")
+    GameTooltip:AddDoubleLine("Albis Minimap Buttons", "v" .. VERSION, nil, nil, nil, 0.6, 0.6, 0.6)
     GameTooltip:AddLine(TR.TIP_CLICK, 1, 1, 1)
     GameTooltip:AddLine(TR.TIP_RIGHTCLICK, 1, 1, 1)
     GameTooltip:AddLine(TR.TIP_DRAG, 1, 1, 1)
@@ -1569,7 +1626,7 @@ local function BuildPanel()
 
     local titleFS = c:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
     titleFS:SetPoint("TOPLEFT", 16, -16)
-    titleFS:SetText("Albis Minimap Buttons")
+    titleFS:SetText("Albis Minimap Buttons  |cff999999v" .. VERSION .. "|r")
     local sub = c:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     sub:SetPoint("TOPLEFT", titleFS, "BOTTOMLEFT", 0, -6)
     sub:SetText(TR.OPT_SUBTITLE)
@@ -1765,6 +1822,12 @@ local function SlashHandler(msg)
     elseif cmd == "scan" then
         AMB:Scan()
         Print(TR.MSG_FOUND:format(#entries))
+    elseif cmd == "version" or cmd == "ver" then
+        Print(TR.MSG_VERSION:format(VERSION))
+        local names = {}
+        for name, v in pairs(AMB.groupVersions or {}) do names[#names + 1] = name .. " " .. v end
+        table.sort(names)
+        if #names > 0 then Print(TR.MSG_VERSIONS_GROUP:format(table.concat(names, ", "))) end
     elseif cmd == "list" then
         AMB:Scan()
         for _, e in ipairs(entries) do
@@ -1787,6 +1850,7 @@ local function SlashHandler(msg)
         Print(TR.HELP_LIST)
         Print(TR.HELP_IGNORE)
         Print(TR.HELP_SCAN)
+        Print(TR.HELP_VERSION)
     end
 end
 
@@ -1799,7 +1863,7 @@ end
 -- Start
 ------------------------------------------------------------------------
 AMB:RegisterEvent("PLAYER_LOGIN")
-AMB:SetScript("OnEvent", function(self, event)
+AMB:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_LOGIN" then
         AlbisMinimapButtonsDB = AlbisMinimapButtonsDB or {}
         db = AlbisMinimapButtonsDB
@@ -1821,15 +1885,23 @@ AMB:SetScript("OnEvent", function(self, event)
             end
         end
         AMB:HookLibDBIcon()
+        AMB:HookFrameCreation()
         AMB:WarnConflicts()
+        AMB:StartWatcher()
+        AMB:InitVersionCheck()
         self:RegisterEvent("ADDON_LOADED")
         self:RegisterEvent("PLAYER_ENTERING_WORLD")
-        AMB.watcher:Show()
+        self:RegisterEvent("GROUP_ROSTER_UPDATE")
     elseif event == "ADDON_LOADED" or event == "PLAYER_ENTERING_WORLD" then
         -- nachgeladene Addons (Load-on-Demand) bringen evtl. LibDBIcon
         -- oder einen eigenen Button mit
         AMB:HookLibDBIcon()
         AMB:ScanSoon(1)
+        if event == "PLAYER_ENTERING_WORLD" then AMB:SendVersionSoon(5) end
+    elseif event == "GROUP_ROSTER_UPDATE" then
+        AMB:OnRosterUpdate()
+    elseif event == "CHAT_MSG_ADDON" then
+        AMB:OnAddonMessage(...)
     end
 end)
 
@@ -1854,33 +1926,167 @@ function AMB:WarnConflicts()
     end
 end
 
--- Mehrere Anfragen kurz hintereinander werden zu einem Scan zusammengefasst
+-- Mehrere Anfragen kurz hintereinander werden zu einem (guenstigen) Scan
+-- zusammengefasst
 local scanPending = false
 function AMB:ScanSoon(delay)
-    if not C_Timer then self:Scan(); return end
+    if not C_Timer then self:Scan(false); return end
     if scanPending then return end
     scanPending = true
     C_Timer.After(delay or 0.5, function()
         scanPending = false
-        AMB:Scan()
+        AMB:Scan(false)
     end)
 end
 
--- Waechter: schaut regelmaessig nach Buttons, die ein Addon erst
--- spaeter erzeugt oder einblendet (z.B. nach dem Laden seiner Daten)
-local watcher = CreateFrame("Frame")
-AMB.watcher = watcher
-watcher:Hide()
-watcher.elapsed, watcher.fullElapsed = 0, 0
-watcher:SetScript("OnUpdate", function(self, elapsed)
-    self.elapsed = self.elapsed + elapsed
-    self.fullElapsed = self.fullElapsed + elapsed
-    if self.elapsed < 2 then return end
-    self.elapsed = 0
-    local full = false
-    if self.fullElapsed >= 10 then
-        self.fullElapsed = 0
-        full = not (InCombatLockdown and InCombatLockdown())
+-- Sofort reagieren, wenn ein Addon einen Frame an der Minimap erzeugt
+-- oder einen Button nachtraeglich an die Minimap haengt. Die Hooks tun
+-- nichts weiter als einen Scan anzustossen.
+local function IsMinimapParent(p)
+    return p ~= nil and (p == Minimap or p == MinimapBackdrop or p == MinimapCluster)
+end
+function AMB:HookFrameCreation()
+    if self.creationHooked then return end
+    self.creationHooked = true
+    hooksecurefunc("CreateFrame", function(_, _, parent)
+        if IsMinimapParent(parent) then AMB:ScanSoon(0.5) end
+    end)
+    for _, t in ipairs({ "Button", "Frame", "CheckButton" }) do
+        local ok, probe = pcall(CreateFrame, t)
+        local mt = ok and probe and getmetatable(probe)
+        local methods = mt and mt.__index
+        if type(methods) == "table" and methods.SetParent then
+            hooksecurefunc(methods, "SetParent", function(f, parent)
+                -- Kartenpins werden oft umgehaengt: erst den einen Frame pruefen
+                if IsMinimapParent(parent) and not grabbed[f] and f:IsShown() and SafeLooksLike(f) then
+                    AMB:ScanSoon(0.5)
+                end
+            end)
+        end
     end
-    if NeedsRescan(full) then AMB:Scan() end
-end)
+end
+
+-- Waechter als Rueckfall fuer Buttons, die erst spaeter eingeblendet
+-- werden: alle 10 s eine guenstige Pruefung, jede Minute (nicht im
+-- Kampf) auch die Frames an UIParent. Neu gesucht wird nur bei Bedarf.
+local watchTicks = 0
+local function WatchTick()
+    watchTicks = watchTicks + 1
+    local full = watchTicks % 6 == 0 and not (InCombatLockdown and InCombatLockdown())
+    if NeedsRescan(full) then AMB:Scan(full) end
+end
+function AMB:StartWatcher()
+    if self.watching then return end
+    self.watching = true
+    if C_Timer and C_Timer.NewTicker then
+        C_Timer.NewTicker(10, WatchTick)
+    else
+        local f, acc = CreateFrame("Frame"), 0
+        f:SetScript("OnUpdate", function(_, e)
+            acc = acc + e
+            if acc >= 10 then acc = 0; WatchTick() end
+        end)
+    end
+end
+
+------------------------------------------------------------------------
+-- Versionsabgleich in Gruppe/Raid
+-- Jeder mit dem Addon schickt beim Betreten der Welt und beim Beitritt
+-- zu einer Gruppe einmal seine Version (eine kurze Addon-Nachricht).
+-- Wer eine aeltere Version hat, bekommt einen Hinweis im Chat.
+------------------------------------------------------------------------
+local PREFIX = "AlbisMMB"
+local SendAddonMessage = (C_ChatInfo and C_ChatInfo.SendAddonMessage) or SendAddonMessage
+local RegisterPrefix = (C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix) or RegisterAddonMessagePrefix
+AMB.groupVersions = {}
+local notifiedVersion       -- hoechste Version, auf die schon hingewiesen wurde
+local lastSend, sendPending = 0, false
+local lastGroupSize = 0
+
+local function ParseVersion(v)
+    local t = {}
+    for n in tostring(v):gmatch("%d+") do t[#t + 1] = tonumber(n) end
+    return t
+end
+
+-- true, wenn Version a neuer ist als b
+local function IsNewer(a, b)
+    local x, y = ParseVersion(a), ParseVersion(b)
+    if #x == 0 or #y == 0 then return false end
+    for i = 1, math.max(#x, #y) do
+        local p, q = x[i] or 0, y[i] or 0
+        if p ~= q then return p > q end
+    end
+    return false
+end
+
+local function GroupChannel()
+    if IsInGroup and LE_PARTY_CATEGORY_INSTANCE and IsInGroup(LE_PARTY_CATEGORY_INSTANCE)
+        and not IsInGroup(LE_PARTY_CATEGORY_HOME) then
+        return "INSTANCE_CHAT"
+    end
+    if IsInRaid and IsInRaid() then return "RAID" end
+    if IsInGroup and IsInGroup() then return "PARTY" end
+end
+
+local function GroupSize()
+    return (GetNumGroupMembers and GetNumGroupMembers()) or 0
+end
+
+function AMB:InitVersionCheck()
+    if not (SendAddonMessage and RegisterPrefix) then return end
+    pcall(RegisterPrefix, PREFIX)
+    self:RegisterEvent("CHAT_MSG_ADDON")
+    lastGroupSize = GroupSize()
+end
+
+function AMB:SendVersion()
+    local channel = GroupChannel()
+    if not channel or not SendAddonMessage then return end
+    -- hoechstens alle 15 Sekunden
+    if GetTime() - lastSend < 15 then return end
+    lastSend = GetTime()
+    pcall(SendAddonMessage, PREFIX, "V:" .. VERSION, channel)
+end
+
+function AMB:SendVersionSoon(delay)
+    if sendPending then return end
+    if not C_Timer then self:SendVersion(); return end
+    sendPending = true
+    C_Timer.After(delay or 3, function()
+        sendPending = false
+        AMB:SendVersion()
+    end)
+end
+
+function AMB:OnRosterUpdate()
+    local n = GroupSize()
+    -- nur wenn jemand dazukommt (oder man selbst beitritt)
+    if n > lastGroupSize then self:SendVersionSoon(4) end
+    if n == 0 then wipe(self.groupVersions) end
+    lastGroupSize = n
+end
+
+local function StripRealm(name)
+    return name and (name:match("^([^%-]+)") or name)
+end
+
+function AMB:OnAddonMessage(prefix, msg, channel, sender)
+    if prefix ~= PREFIX or type(msg) ~= "string" then return end
+    local v = msg:match("^V:(.+)$")
+    if not v then return end
+    local me = UnitName and UnitName("player")
+    local who = StripRealm(sender)
+    if who == me then return end
+    self.groupVersions[who or "?"] = v
+    if IsNewer(v, VERSION) then
+        if not notifiedVersion or IsNewer(v, notifiedVersion) then
+            notifiedVersion = v
+            Print(TR.MSG_UPDATE:format(v, VERSION, who or "?"))
+        end
+    elseif IsNewer(VERSION, v) then
+        -- der andere hat eine aeltere Version: unsere schicken, damit er
+        -- den Hinweis bekommt
+        self:SendVersionSoon(2)
+    end
+end

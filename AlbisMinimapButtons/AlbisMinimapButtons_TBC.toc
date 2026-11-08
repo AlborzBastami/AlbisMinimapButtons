@@ -13,7 +13,7 @@
 ## Notes-zhCN: 将所有小地图按钮收纳到一个可滚动的下拉菜单中。
 ## Notes-zhTW: 將所有小地圖按鈕收納到一個可捲動的下拉選單中。
 ## Author: Albi
-## Version: 1.7.0
+## Version: 1.8.0
 ## OptionalDeps: LibSharedMedia-3.0, SharedMedia, ElvUI
 ## X-License: MIT
 ## SavedVariables: AlbisMinimapButtonsDB
